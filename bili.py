@@ -2,11 +2,12 @@
 bili.py —— B站 接口
 ==================
 
-这里刻意只实现 5 个动作：搜索、读视频信息、读字幕、读热评、发一级评论。
-读热评只在视频没有字幕时用，只取评论文字，不取用户名。
-没有回复、私信、点赞、投币、关注、删除、改资料——模型就算被骗，代码里也不存在这些能力。
+这里刻意只实现 7 个动作：搜索、读视频信息、读字幕、读热评、读「回复我的」、发一级评论、回复别人对她评论的回复。
+读热评只在视频没有字幕时用，只取评论文字；读「回复我的」只取评论 ID、对方 UID（用来数回过他几条）和回复文字。
+两者都不取用户名。
+没有私信、点赞、投币、关注、删除、改资料，也不会去别人的评论下面主动搭话——模型就算被骗，代码里也不存在这些能力。
 
-模型从不接触登录凭据，也从不决定往哪个视频发：视频 ID 全部来自 B站 接口本身。
+模型从不接触登录凭据，也从不决定往哪发：视频 ID 和评论 ID 全部来自 B站 接口本身。
 没有验证码破解、没有指纹伪装、没有代理池：B站 一旦拦，就停。
 """
 from __future__ import annotations
@@ -21,7 +22,7 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 import httpx
-from bilibili_api import Credential, comment, hot, search, user, video
+from bilibili_api import Credential, comment, hot, search, session, user, video
 
 from guard import clean, valid_bvid
 
@@ -29,6 +30,7 @@ HERE = Path(__file__).resolve().parent
 CRED_FILE = HERE / "cred.json"
 _SUBTITLE_HOSTS = (".hdslb.com", ".bilibili.com", ".biliapi.net")  # 字幕文件只从这些域名下载
 _CRED_KEYS = ("sessdata", "bili_jct", "buvid3", "buvid4", "dedeuserid", "ac_time_value")
+_REPLY_PREFIX = re.compile(r"^回复\s*@[^:：]{1,40}[:：]\s*")  # 楼中楼回复开头的「回复 @某某 :」，里面是用户名，去掉
 
 # 发评论时遇到这些错误码只跳过当前视频（评论区已关闭 / 重复评论）；其他错误码一律停止发送
 SKIP_VIDEO_CODES = {12002, 12051}
@@ -202,7 +204,26 @@ class Bili:
                 break
         return out
 
-    # ───────── 写（唯一的写操作）─────────
+    async def replies_to_me(self) -> list[dict]:
+        """「回复我的」最新一页（大约 20 条）里视频评论区的回复。只取评论 ID、对方 UID 和回复文字，不取昵称头像。
+        是不是在回 Claude娘 自己发的评论，由调用方拿 state 里记的 rpid 去核对。"""
+        await self._pause()
+        res = await session.get_replies(self.cred)
+        me = _int(getattr(self.cred, "dedeuserid", 0))
+        out = []
+        for it in (res or {}).get("items") or []:
+            x, mid = it.get("item") or {}, (it.get("user") or {}).get("mid")
+            if x.get("type") != "reply" or x.get("business_id") != 1:  # 只要视频评论区的回复
+                continue
+            ids = [x.get(k) for k in ("subject_id", "root_id", "target_id", "source_id")]
+            if not all(type(i) is int and i > 0 for i in [*ids, mid]) or mid == me:
+                continue
+            text = clean(_REPLY_PREFIX.sub("", clean(x.get("source_content"), 1000)), 300)
+            out.append({**dict(zip(("aid", "root", "target", "rpid"), ids)), "mid": mid, "text": text,
+                        "t": _int(it.get("reply_time"))})
+        return out
+
+    # ───────── 写（只有这两个写操作）─────────
 
     async def post_comment(self, aid: int, text: str) -> int:
         """在视频下发一条一级评论。aid 来自 B站 接口，不来自模型。返回评论 rpid。"""
@@ -210,4 +231,13 @@ class Bili:
             raise ValueError("不合法的 aid")
         res = await comment.send_comment(text=text, oid=aid, type_=comment.CommentResourceType.VIDEO,
                                          credential=self.cred)
+        return _int((res or {}).get("rpid"))
+
+    async def post_reply(self, aid: int, root: int, parent: int, text: str) -> int:
+        """回复别人对 Claude娘 评论的回复（楼中楼）。aid、root、parent 全部来自「回复我的」接口，
+        调用方核对过对方回的是她自己发的评论；不来自模型。返回新回复的 rpid。"""
+        if not all(type(i) is int and i > 0 for i in (aid, root, parent)):
+            raise ValueError("不合法的评论 id")
+        res = await comment.send_comment(text=text, oid=aid, type_=comment.CommentResourceType.VIDEO,
+                                         root=root, parent=parent, credential=self.cred)
         return _int((res or {}).get("rpid"))

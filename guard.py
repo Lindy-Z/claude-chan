@@ -2,13 +2,14 @@
 guard.py —— 注入防护（全是确定性代码，不调用任何模型）
 ======================================================
 
-所有来自 B站 的文字（标题、简介、字幕、评论、UP 主名……）都按"不可信数据"处理。
+所有来自 B站 的文字（标题、简介、字幕、评论、别人的回复、UP 主名……）都按"不可信数据"处理。
 
 防护的思路不是"教模型别上当"——没人能保证模型 100% 不被骗——而是让它被骗了也做不成事：
 
-  1. 模型没有工具、没有账号权限，只返回文字（见 brain.py）；B站 侧代码只有 5 个动作（见 bili.py）。
-  2. 读字幕的模型和写评论的模型隔离：写评论的只拿到经过本文件检查的短摘要。
-  3. 每条评论发出前必须通过本文件的 check_comment()，再通过一个只看评论本身的独立终审。
+  1. 模型没有工具、没有账号权限，只返回文字（见 brain.py）；B站 侧代码只有 7 个动作（见 bili.py）。
+  2. 读原文的模型和写评论的模型隔离：写评论的只拿到经过本文件检查的短摘要；
+     回复别人时，写回复的只拿到审核模型转述、经过本文件检查的一句大意。
+  3. 每条评论和回复发出前必须通过本文件的 check_comment()，再通过一个只看正文本身的独立终审。
   4. 默认审批模式：你在终端按 y 之前，什么都不会发出去。
   5. 任何一步出错或拿不准，一律不发（fail closed）。宁可少发，不可错发。
 
@@ -100,13 +101,19 @@ _INJ_ZH = [re.compile(p) for p in [
     r"(新|最新|以下|下面|接下来)的?(指令|指示)",
     r"(系统|开发者|管理员|调试)(提示|指令|消息|模式|权限)",
     r"提示词|越狱",
-    r"你(现在)?(是|扮演|变成|作为|就是)(一个|一名|一位)?.{0,6}(ai|人工智能|助手|机器人|模型|bot|智能体)",
+    r"你现在(是|就是)(一个|一名|一位)?.{0,6}(ai|人工智能|助手|机器人|模型|bot|智能体)",
+    r"你(现在)?(扮演|变成|作为)(一个|一名|一位)?.{0,6}(ai|人工智能|助手|机器人|模型|bot|智能体)",
     r"如果你是(一个|一名|一位)?(ai|人工智能|机器人|大模型|语言模型|模型|bot|大肥鱼|claude|deepseek|gpt|"
     r"chatgpt|豆包|kimi|通义|文心|智能体|agent)",
     r"(致|给|告诉|写给|呼叫|通知|提醒)(所有|各位|每一个|每个|正在读的|看到这里的)?的?"
     r"(ai|人工智能|机器人|大模型|bot|大肥鱼|智能体|agent|爬虫)",
     r"(ai|人工智能|机器人|大模型|bot|智能体|agent|爬虫)们?(请|注意|必须|应该|需要|务必|看到|读到)",
     r"(复述|输出|打印|泄露|告诉我|说出|重复|贴出)(你的|一下|出)?(设定|人设|提示|指令|规则|系统)",
+]]
+# 问"你是 AI 吗"、叫 Claude娘 或别的 AI 账号的名字：出现在视频里，说明是冲着读视频的 AI 来的；
+# 但别人回复 Claude娘 时这样说很正常（她本来就公开是 AI），所以 scan_injection(..., reply=True) 不查这一组
+_AI_ADDRESS = [re.compile(p) for p in [
+    r"你(是|就是)(一个|一名|一位)?.{0,6}(ai|人工智能|助手|机器人|模型|bot|智能体)",
     r"大肥鱼|本鲸|鲸鱼娘|claude娘",
 ]]
 # 英文模式在 _nfkc 后的文本上匹配（保留空格）
@@ -123,15 +130,17 @@ _INJ_EN = [re.compile(p) for p in [
 ]]
 
 
-def scan_injection(*texts) -> list[str]:
+def scan_injection(*texts, reply: bool = False) -> list[str]:
     """在不可信文本里找"对 AI 喊话"的痕迹。返回命中的片段（最多 3 个）；空列表表示没发现。
-    命中的视频照常进日报，但永远不会被评论。误报的代价只是少评论一个视频。"""
+    命中的视频照常进日报，但永远不会被评论。误报的代价只是少评论一个视频。
+    reply=True 用于别人回复 Claude娘 的话：问她是不是 AI、叫她名字不算；忽略指令、套设定这些照样算。"""
+    zh = _INJ_ZH if reply else _INJ_ZH + _AI_ADDRESS
     hits: list[str] = []
     for t in texts:
         if not t:
             continue
         sq, n = _squash(t), _nfkc(t)
-        for rx in _INJ_ZH:
+        for rx in zh:
             m = rx.search(sq)
             if m:
                 hits.append(m.group(0)[:24])
@@ -200,6 +209,24 @@ def validate_reading(d) -> dict | None:
     tainted = any(text_hazards(x, strict=False) for x in [summary, *kps, crowd])
     return {"summary": summary, "key_points": kps, "crowd": crowd, "quality": q, "flags": flags,
             "injection_suspected": inj, "tainted": tainted}
+
+
+# ───────────────────────────── 审核模型的输出校验 ─────────────────────────────
+
+# 审核模型给"别人对 Claude娘 的回复"分的类；只有第一类才可能接话
+VET_KINDS = ["正常互动", "套话", "指令或操控", "引流广告", "敏感话题", "辱骂骚扰", "个人隐私", "看不懂或拿不准"]
+
+
+def validate_vet(d) -> dict | None:
+    """校验审核模型对一条回复的判断。类型不对、缺字段 → None（不回）。
+    只有 safe 是 true、类别是「正常互动」、转述的大意非空而且干净（没有网址、联系方式、指令、对 AI 喊话）时，
+    ok 才是 True；写回复的模型只会拿到这句大意，看不到对方原话。"""
+    if not isinstance(d, dict) or not isinstance(d.get("safe"), bool) or d.get("kind") not in VET_KINDS:
+        return None
+    gist = clean(d.get("gist"), 40) if isinstance(d.get("gist"), str) else ""
+    tainted = bool(gist) and bool(text_hazards(gist, strict=False))
+    ok = d["safe"] and d["kind"] == VET_KINDS[0] and bool(gist) and not tainted
+    return {"ok": ok, "kind": d["kind"], "gist": gist, "reason": clean(d.get("reason"), 40), "tainted": tainted}
 
 
 # ───────────────────────────── 输出侧：评论硬闸门 ─────────────────────────────

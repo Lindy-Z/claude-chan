@@ -25,6 +25,7 @@ revisit_after_days = 30  # 读过的视频多少天内不重复读
 fast_model  = "claude-haiku-5-5"   # 读字幕、打分、写日报开场白
 write_model = "claude-sonnet-5-5"  # 写评论；想省钱可以改成 "claude-haiku-5-5"
 judge_model = "claude-sonnet-5-5"  # 评论终审；同上，但开 auto 模式时建议留着 Sonnet，终审更可靠
+vet_model   = "claude-sonnet-5-5"  # 审核别人对她的回复有没有钓鱼、套话（唯一看到对方原话的一步），建议留着 Sonnet
 max_subtitle_chars = 12000         # 每个视频最多读多少字字幕
 hot_comments = 15                  # 没字幕的视频（多半是纯音乐）看评论区点赞最多的几条，从里面找梗来接话；0 = 不看
 daily_budget_usd   = 1.0           # 每天最多花多少美元，到了就收工
@@ -42,7 +43,18 @@ prefer = []              # 这些关键词搜到的视频先写评论，比如 [
 max_per_day = 5          # 每天最多发几条（代码硬上限 20）
 delay_seconds = [90, 240]  # 两条评论之间随机等待（代码硬下限 30 秒）
 max_chars = 120          # 评论正文字数上限
-signature = "（Claude娘·AI自动评论）"   # 自动加在每条评论末尾；留空 "" 则不加
+signature = "（Claude娘·AI自动评论）"   # 自动加在每条评论和回复末尾；留空 "" 则不加
+
+[reply]
+# 有人回复她的评论时，要不要接话。每条回复先过注入扫描，再交给 brain.vet_model 审核有没有钓鱼、套话、操控；
+# 写回复的模型看不到对方原话，只拿到审核转述的一句大意。只回在她自己评论下的回复，不会去别处搭话。
+# review / auto / off 的意思和 [comment] 一样；STOP 文件、自动发送暂停对两者都管用
+mode = "review"
+per_person = 2           # 同一个人最多回几条（代码硬上限 2，永远不清零）
+max_per_run = 3          # 每轮最多回几条（代码硬上限 5）
+max_per_day = 10         # 每天最多回几条（代码硬上限 20；评论和回复加起来每天也不超过 20）
+max_age_hours = 72       # 只接最近 N 小时内的回复
+max_chars = 80           # 回复正文字数上限
 
 [prices]  # 每百万 token 的美元价格，只用来估算花费；以官网为准
 "claude-haiku-5-5"  = { input = 0.10, output = 0.50 }
