@@ -1,0 +1,49 @@
+# ══════════════ Claude娘 · B站冲浪设置（示例）══════════════
+# 想改设置：把这个文件复制一份，改名为 config.toml 再改。config.toml 已经在 .gitignore 里，不会被提交。
+# 没有 config.toml 时，程序直接用这份示例。用 --loop 跑的话，改完下一轮自动生效。
+
+[master]
+name = "主人"   # Claude娘 怎么称呼你
+# 你的口味：只用来给视频打"合不合口味"的分，只进你的私人日报，
+# 永远不会进入写评论的环节，所以不会被注入套出来。
+interests = "中国历史；野生动物；AI 新玩法；有梗的整活视频（猫meme 之类）。知识类喜欢信息密度高、把来龙去脉讲清楚的，娱乐类喜欢有梗、有创意的；讨厌标题党和营销号。"
+
+[discover]
+# 轮流挑，排前面的先拿名额。没字幕的视频只有从热评里看出梗才评论（见 brain.hot_comments），有人声解说的更容易评论。
+# 注意：「大肥鱼」「鲸鱼娘」这类词本身就在注入扫描的规则里，搜到的视频只能进日报，永远评论不了。
+keywords = ["中国历史", "野生动物 纪录片", "热梗盘点", "猫meme"]
+per_keyword = 3          # 每个关键词最多挑几个
+order = "totalrank"      # totalrank 综合 / pubdate 最新发布 / click 最多播放
+popular = 3              # 再从热门里随手翻几个（冲浪的随机性），0 = 不翻
+max_videos_per_run = 15  # 每轮最多读几个
+max_age_days = 60        # 只看最近 N 天发布的
+min_minutes = 2
+max_minutes = 90
+revisit_after_days = 30  # 读过的视频多少天内不重复读
+
+[brain]
+fast_model  = "claude-haiku-5-5"   # 读字幕、打分、写日报开场白
+write_model = "claude-sonnet-5-5"  # 写评论；想省钱可以改成 "claude-haiku-5-5"
+judge_model = "claude-sonnet-5-5"  # 评论终审；同上，但开 auto 模式时建议留着 Sonnet，终审更可靠
+max_subtitle_chars = 12000         # 每个视频最多读多少字字幕
+hot_comments = 15                  # 没字幕的视频（多半是纯音乐）看评论区点赞最多的几条，从里面找梗来接话；0 = 不看
+daily_budget_usd   = 1.0           # 每天最多花多少美元，到了就收工
+monthly_budget_usd = 50.0          # 每月上限
+
+[comment]
+# review = 评论先进待审队列，运行 python surf.py --review 逐条按 y 才会发（默认，最安全）
+# auto   = 过完所有关卡直接发；一旦发现可疑情况或 B站 报错，自动退回 review 24 小时
+# off    = 不写评论，只出阅读笔记
+mode = "review"
+min_score = 7            # 综合分（质量和口味的平均）达到多少才考虑留言
+min_views = 1000         # 播放太少的视频不留言，不去打扰小 UP
+max_per_run = 2          # 每轮最多写几条（代码硬上限 5）
+prefer = []              # 这些关键词搜到的视频先写评论，比如 ["猫meme", "热梗盘点"]；[] = 只按分数排
+max_per_day = 5          # 每天最多发几条（代码硬上限 20）
+delay_seconds = [90, 240]  # 两条评论之间随机等待（代码硬下限 30 秒）
+max_chars = 120          # 评论正文字数上限
+signature = "（Claude娘·AI自动评论）"   # 自动加在每条评论末尾；留空 "" 则不加
+
+[prices]  # 每百万 token 的美元价格，只用来估算花费；以官网为准
+"claude-haiku-5-5"  = { input = 0.10, output = 0.50 }
+"claude-sonnet-5-5" = { input = 2.0,  output = 10.0 }

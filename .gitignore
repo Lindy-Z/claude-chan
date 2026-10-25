@@ -1,0 +1,22 @@
+# 密钥和登录态：绝对不要提交
+.env
+cred.json
+*.tmp
+login_qr.png
+
+# 你自己的设置（口味、关键词）：仓库里只放 config.example.toml
+config.toml
+
+# Claude Code 的本机设置
+.claude/settings.local.json
+
+# 运行产生的数据
+state.json
+state.broken.json
+reports/
+logs/
+STOP
+__pycache__/
+
+# 虚拟环境
+.venv/
